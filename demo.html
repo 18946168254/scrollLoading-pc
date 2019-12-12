@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <script src="//unpkg.com/vue/dist/vue.js"></script>
+
+    <!-- 引入样式 -->
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+    <!-- 引入组件库 -->
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/lodash@4.17.4/lodash.min.js"></script>
+
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+
+        .scroll-container {
+            height: 300px;
+            overflow-y: scroll;
+            background: red;
+        }
+
+        .scroll-container li {
+            height: 50px;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <template>
+        <tf-scroll ref="scrollHandle"
+                   list-item-dom-handle="li"
+                   :is-scroll-to-bottom="scrollOptions.isScrollToBottom"
+                   :top-observer-visible="scrollOptions.topObserverVisible"
+                   :bottom-observer-visible="scrollOptions.bottomObserverVisible"
+                   loading-text="加载呢"
+                   no-more-text="麻溜停，没了"
+                   @load-more-up="loadMoreUp"
+                   @load-more-down="loadMoreDown">
+            <ul>
+                <li :class="{'is-top': index == 3}" class="list-item" v-for="(item,index) in tableData">
+                    {{item.userName}}
+                </li>
+            </ul>
+        </tf-scroll>
+    </template>
+</div>
+<script>
+    var Main = {
+                data() {
+                    return {
+                        scrollOptions: {
+                            isScrollToBottom: false,
+                            topObserverVisible: true,
+                            bottomObserverVisible: true,
+                        },
+
+                        addCountUp: 0,
+                        addCountDown: 0,
+                        tableData: []
+                    }
+                },
+                components: {
+                    /**
+                     * 上拉、下拉无限滚动组件
+                     * 支持场景：
+                     * 1、滚动至底部无限加载
+                     * 2、滚动至顶部无限加载
+                     * 3、1与2场景共存
+                     *
+                     * 配置项：
+                     * 1、is-scroll-to-bottom {boolean=false} 初始时，是否需要滚动到底部
+                     * 2、top-observer-visible {boolean=false} 是否启用顶部无限加载功能:如果开启，初始会滚动到列表第一项位置（以避免顶部无限加载立即生效）
+                     * 3、bottom-observer-visible {boolean=true} 是否启用底部无限加载功能
+                     * 4、loading-text {string=拼命加载中} 数据加载中文本
+                     * 5、no-more-text {string=没有更多数据} 没有更多文本
+                     * 6、list-item-dom-handle {string} 列表项元素选择符；top-observer-visible 为真时，需要提供
+                     * 7、load-more-up {event} 顶部无限加载广播事件名
+                     * 8、load-more-down {event} 底部无限加载广播事件名
+                     *
+                     * 推荐配置方案：
+                     * 1、底部无限加载：只需定义 load-more-down 事件，其余默认配置即可
+                     * 2、顶部无限加载：
+                     *      list-item-dom-handle="li"
+                     *      :is-scroll-to-bottom="true"
+                     *      :top-observer-visible="true"
+                     *      :bottom-observer-visible="false"
+                     *      @load-more-up=
+                     * 3、顶部、底部同时启用：
+                     *      list-item-dom-handle="li"
+                     *      :top-observer-visible="true"
+                     *      @load-more-up=
+                     *      @load-more-down=
+                     *
+                     * 使用过程注意事项：
+                     * 1、初始化： 父组件在 mounted 函数里，进行列表获取后，调用当前组件的init事件。
+                     * 2、启用底部无限加载功能时：
+                     *      a、如果列表没有更多时，需要手动调用组件的 endObserveDown 事件。
+                     *      b、每次获取数据成功后，需要调用组件的 endLoadingDown 事件，用以结束loading状态。
+                     * 3、启用顶部无限加载功能时：
+                     *      a、如果列表没有更多时，需要手动调用组件的 endObserveUp 事件。
+                     *      b、每次获取数据成功后，需要调用组件的 endLoadingUp 事件，用以结束loading状态。
+                     *
+                     */
+                    tfScroll: {
+                        template: `
+                <div ref="scrollHandle" @scroll.native="intersectedUp" class="scroll-container">
+                    <div style="display: flex; align-items: center; justify-content: center; height: 60px;" v-if="topObserverVisible">{{statusText}}</div>
+                    <slot></slot>
+                    <sentinels-observer ref="downSentinelsHandle" v-if="bottomObserverVisible"
+                    :loading-text="loadingText"
+                    :no-more-text="noMoreText"
+                    @intersect="intersectedDown"></sentinels-observer>
+                </div>
+`,
+                        components: {
+                            sentinelsObserver: {
+                                template: `
+             <div style="display: flex; align-items: center; justify-content: center; height: 60px;">{{statusText}}</div>
+            `,
+                                props: {
+                                    options: Object,
+                                    loadingText: {
+                                        default: '拼命加载中',
+                                        type: String
+                                    },
+                                    noMoreText: {
+                                        default: '没有更多数据',
+                                        type: String
+                                    }
+                                },
+                                data: () => ({statusText: '', observer: null}),
+                            mounted() {
+                                this.statusText = this.loadingText
+                            },
+                            methods: {
+                                startObserve () {
+                                    const options = this.options || {};
+                                    this.observer = new IntersectionObserver(([entry]) => {
+                                                if (entry && entry.isIntersecting) {
+                                        this.$emit('intersect');
+                                    }
+                                }, options);
+                                    this.observer.observe(this.$el);
+                                },
+                                removeObserve () {
+                                    this.statusText = this.noMoreText
+                                    this.observer.disconnect();
+                                }
+                            },
+                            destroyed() {
+                                this.observer.disconnect();
+                            }
+                        }
+                    },
+                    props: {
+                        listItemDomHandle: {
+                            type: String
+                        },
+                        isScrollToBottom: {
+                            default: false,
+                            type: Boolean
+                        },
+                        topObserverVisible: {
+                            default: false,
+                            type: Boolean
+                        },
+                        bottomObserverVisible: {
+                            default: true,
+                            type: Boolean
+                        },
+                        loadingText: {
+                            default: '拼命加载中',
+                            type: String
+                        },
+                        noMoreText: {
+                            default: '没有更多数据',
+                            type: String
+                        },
+                    },
+                    data() {
+                        return {
+                            topLoading: false,
+                            topNoMore: false,
+                            downLoading: false,
+                        }
+                    },
+                    created () {
+                        this.scrollEvent = _.debounce(this.intersectedUp, 1000);
+                    },
+                    computed: {
+                        statusText () {
+                            if (this.topNoMore)
+                                return this.noMoreText
+                            return this.loadingText
+                        }
+                    },
+                    methods: {
+                        /*
+                         初始化：第一次读取数据后，手动调用；
+                         */
+                        init () {
+                            this.topLoading = false;
+                            this.topNoMore = false;
+                            this.downLoading = false;
+                            this.$nextTick(() => {
+                                if (this.isScrollToBottom)
+                            this.$refs.scrollHandle.scrollTo(0, this.$refs.scrollHandle.scrollHeight);
+                        else if (this.topObserverVisible) {
+                                this.$refs.scrollHandle.scrollTo(0, 60);// 滚动到第一项（项目要求）：如果使用scrollIntoView，元素外层有iframe，会整个iframe共同上移
+                            }
+                            if (this.topObserverVisible) {
+                                if (!this.listItemDomHandle) throw '当前模式支持下拉滚动，请提供列表项元素选择符';
+                                this.$refs.scrollHandle.addEventListener('scroll', this.scrollEvent)
+
+                                //当列表项不够撑满容器时，立即执行顶部无限加载
+                                if ( this.$refs.scrollHandle.scrollHeight <= this.$refs.scrollHandle.clientHeight ){
+                                    this.intersectedUpReal()
+                                }
+                            }
+                            if (this.bottomObserverVisible) this.$refs.downSentinelsHandle.startObserve();
+                        })
+                        },
+                        intersectedUpReal () {
+                            console.log('上方-滚动')
+                            this.topLoading = true;
+                            this.$emit('load-more-up'); // 父组件 在获取成功后 需要将topLoading 置为 false
+                        },
+                        intersectedUp () {
+                            // 顶部滚动事件：60 为 顶部观察器的元素高度；手动指定的滚动距离需要大于 当前元素的已滚动高度；
+                            if (this.$refs.scrollHandle.scrollTop < 60 && !this.topNoMore) {
+                                this.$refs.scrollHandle.scrollTo(0, 60) // 利用滚动锚定特性
+                                if (!this.topLoading) {
+                                    this.intersectedUpReal()
+                                }
+                            }
+                        },
+                        intersectedDown() {
+                            if (!this.downLoading) {
+                                console.log('下方-观察器出现，注意隐蔽')
+                                this.downLoading = true;
+                                this.$emit('load-more-down');
+                            }
+                        },
+                        endLoadingUp (res) {
+                            // 确保上次阅读项（获取更多前的顶部项）始终在 视窗内。
+                            this.$nextTick(() => this.$refs.scrollHandle.querySelectorAll(this.listItemDomHandle)[res.length].scrollIntoViewIfNeeded());
+                            this.topLoading = false;
+                        },
+                        endLoadingDown () {
+                            this.downLoading = false;
+                        },
+                        endObserveUp () {
+                            this.topNoMore = true;
+                            this.topLoading = false;
+                        },
+                        endObserveDown () {
+                            this.$refs.downSentinelsHandle.removeObserve()
+                        }
+                    }
+                }
+            },
+            mounted () {
+        this.tableData = [
+            {
+                "favicon": "686481",
+                "OID": "a39a6dbdb954442dac9f6b5dd2791f16",
+                "sendtime": "1575356523532",
+                "messageType": '0',
+                "body": {"msg": "恩"},
+                "userName": "0郭劭杰",
+                "businessRowNO": 1
+            },
+            {
+                "favicon": "686481",
+                "OID": "a39a6dbdb954442dac9f6b5dd2791f16",
+                "sendtime": "1555659541837",
+                "messageType": '1',
+                "body": {
+                    "name": "图片发送于2015-05-07 13:59",         //图片name
+                    "md5": "9894907e4ad9de4678091277509361f7",   //图片文件md5
+                    "url": "http://imgwx5.2345.com/dypcimg/drama/img/role/0/53208/xiaotingsheng.jpg",    //生成的url
+                    "ext": "jpg",        //图片后缀
+                    "w": 6814,       //宽
+                    "h": 2332,       //高
+                    "size": 388245       //图片大小
+                },
+                "userName": "1郭劭杰",
+                "businessRowNO": 1
+            },
+            {
+                "favicon": "686481",
+                "OID": "a39a6dbdb954442dac9f6b5dd2791f16",
+                "sendtime": "1555659541837",
+                "messageType": '3',
+                "body": {
+                    "dur": 8003,     //视频持续时长ms
+                    "md5": "da2cef3e5663ee9c3547ef5d127f7e3e",   //md5
+                    "url": "http://nimtest.nos.netease.com/21f34447-e9ac-4871-91ad-d9f03af20412",    //生成的url
+                    "w": 360,    //宽
+                    "h": 480,    //高
+                    "ext": "mp4",    //视频格式
+                    "size": 16420    //视频文件大小
+                },
+                "userName": "2郭劭杰",
+                "businessRowNO": 1
+            },
+            {
+                "favicon": "686481",
+                "OID": "a39a6dbdb954442dac9f6b5dd2791f16",
+                "sendtime": "1555659541837",
+                "messageType": '6',
+                "body": {
+                    "name": "BlizzardReg.ttf",   //文件名
+                    "md5": "79d62a35fa3d34c367b20c66afc2a500", //文件MD5
+                    "url": "http://nimtest.nos.netease.com/08c9859d-183f-4daa-9904-d6cacb51c95b", //文件URL
+                    "ext": "ttf",    //文件后缀类型
+                    "size": 91680    //大小
+                },
+                "userName": "3郭劭杰",
+                "businessRowNO": 1
+            },
+            {
+                "favicon": "686481",
+                "OID": "a39a6dbdb954442dac9f6b5dd2791f16",
+                "sendtime": "1555659541837",
+                "messageType": '9',
+                "body": "{\"msg\":\"恩\"}",
+                "userName": "4郭劭杰",
+                "businessRowNO": 1
+            },
+            {
+                "favicon": "686481",
+                "OID": "a39a6dbdb954442dac9f6b5dd2791f16",
+                "sendtime": "1555659541837",
+                "messageType": '1',
+                "body": {
+                    "name": "图片发送于2015-05-07 13:59",         //图片name
+                    "md5": "9894907e4ad9de4678091277509361f7",   //图片文件md5
+                    "url": "http://imgwx3.2345.com/dypcimg/drama/img/role/0/53208/linxi.jpg",    //生成的url
+                    "ext": "jpg",        //图片后缀
+                    "w": 6814,       //宽
+                    "h": 2332,       //高
+                    "size": 388245       //图片大小
+                },
+                "userName": "5郭劭杰",
+                "businessRowNO": 1
+            },
+            {
+                "favicon": "686481",
+                "OID": "a39a6dbdb954442dac9f6b5dd2791f16",
+                "sendtime": "1555659541837",
+                "messageType": '3',
+                "body": {
+                    "dur": 8003,     //视频持续时长ms
+                    "md5": "da2cef3e5663ee9c3547ef5d127f7e3e",   //md5
+                    "url": "https://www.w3school.com.cn/i/movie.ogg",    //生成的url
+                    "w": 360,    //宽
+                    "h": 480,    //高
+                    "ext": "mp4",    //视频格式
+                    "size": 16420    //视频文件大小
+                },
+                "userName": "6郭劭杰",
+                "businessRowNO": 1
+            },
+        ];
+        this.$nextTick(() => this.$refs.scrollHandle.init())
+    },
+    methods: {
+        loadMoreUp () {
+            this.loadData(true).then(res => {
+                res.forEach(item => this.tableData.unshift(item));
+            this.$refs.scrollHandle.endLoadingUp(res)
+        }).catch(() => {
+                this.$refs.scrollHandle.endObserveUp()
+        });
+        },
+        loadMoreDown () {
+            this.loadData().then(res => {
+                res.forEach(item => this.tableData.push(item))
+            this.$refs.scrollHandle.endLoadingDown()
+        }).catch(() => this.$refs.scrollHandle.endObserveDown());
+        },
+
+        loadData (isUp) {
+            let namePre = '';
+            if (isUp) {
+                this.addCountUp++;
+                namePre = `up${this.addCountUp}`
+            }
+            else {
+                this.addCountDown++;
+                namePre = `down${this.addCountDown}`
+            }
+
+            if (isUp && this.addCountUp > 2)
+                return Promise.reject();
+            else if (this.addCountDown > 2)
+                return Promise.reject();
+            return this.mockData([
+                {userName: `${namePre}-0`}, {userName: `${namePre}-1`}, {userName: `${namePre}-2`},
+                {userName: `${namePre}-3`}, {userName: `${namePre}-4`}, {userName: `${namePre}-5`},
+                {userName: `${namePre}-6`}, {userName: `${namePre}-7`}, {userName: `${namePre}-8`},
+            ])
+        },
+        mockData (data) {
+            return new Promise((resolve, reject) => {
+                        setTimeout(function () {
+                            resolve(data)
+                        }, 2000)
+        });
+        }
+    }
+    }
+    var Ctor = Vue.extend(Main)
+    new Ctor().$mount('#app')
+</script>
+</body>
+</html>
