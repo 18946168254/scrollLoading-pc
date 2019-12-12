@@ -38,6 +38,7 @@
                    :is-use-scroll-anchoring="scrollOptions.isUseScrollAnchoring"
                    :top-observer-visible="scrollOptions.topObserverVisible"
                    :bottom-observer-visible="scrollOptions.bottomObserverVisible"
+                   :top-trigger-distance="scrollOptions.topTriggerDistance"
                    loading-text="加载呢"
                    no-more-text="麻溜停，没了"
                    @load-more-up="loadMoreUp"
@@ -61,6 +62,7 @@
                     isUseScrollAnchoring: true,
                     topObserverVisible: true,
                     bottomObserverVisible: true,
+                    topTriggerDistance: 300,
                 },
 
                 addCountUp: 0,
@@ -88,6 +90,7 @@
              * 9、load-more-up-get-data {event} 顶部无限加载-通知获取数据 广播事件名，使用滚动锚定特性时需要
              * 10、load-more-up-wrap-data {event} 顶部无限加载-通知重组数据 广播事件名，使用滚动锚定特性时需要
              * 11、load-more-down {event} 底部无限加载广播事件名
+             * 12、top-trigger-distance {Number} 可以指定顶部无限加载触发距离：大于顶部观察器高度 并小于 容器高度
              *
              * 推荐配置方案：
              * 1、底部无限加载：只需定义 load-more-down 事件，其余默认配置即可
@@ -104,7 +107,7 @@
              *      @load-more-down=
              *
              * 使用过程注意事项：
-             * 1、初始化： 父组件在 mounted 函数里，进行列表获取后，调用当前组件的init事件。
+             * 1、初始化： 父组件在 mounted 函数/$nextTick里，进行列表获取后，调用当前组件的init事件。
              * 2、启用底部无限加载功能时：
              *      a、如果列表没有更多时，需要手动调用组件的 endObserveDown 事件。
              *      b、每次获取数据成功后，需要调用组件的 endLoadingDown 事件，用以结束loading状态。
@@ -206,15 +209,16 @@
                     }
                 },
                 created () {
-                    this.scrollEvent = _.debounce(this.intersectedUp, 500);
+                    this.scrollEvent = _.debounce(this.intersectedUp, 200);
                 },
                 mounted() {
                     this.topObserverHeight = this.$refs.topObserverHandle.clientHeight
-//                    this.topObserverTriggerDistance = this.topTriggerDistance
-//                    if (this.topTriggerDistance < 1 || this.topTriggerDistance > this.$refs.scrollHandle.clientHeight/2) {
-//                        // todo throw错误，
-//                        this.topObserverTriggerDistance = this.topObserverHeight
-//                    }
+                    this.topObserverTriggerDistance = this.topObserverHeight
+                    this.topTriggerDistanceCanUse = true
+                    if (this.topTriggerDistance < this.$refs.topObserverHandle.clientHeight || this.topTriggerDistance > this.$refs.scrollHandle.clientHeight) {
+                        this.topTriggerDistanceCanUse = false
+                        throw 'topTriggerDistance 属性配置错误（应大于顶部观察器高度 并小于 容器高度），使用默认高度'
+                    }
                 },
                 computed: {
                     statusText () {
@@ -251,7 +255,7 @@
                         })
                     },
                     startScrollAnchoring () {
-                        if (this.useScrollAnchoring)
+                        if (this.useScrollAnchoring && this.$refs.scrollHandle.scrollTop < this.topObserverHeight)
                             this.$refs.scrollHandle.scrollTo(0, this.topObserverHeight) // 利用滚动锚定特性：锚定高度需要大于顶部观察器的高度
                     },
                     intersectedUpReal () {
@@ -263,11 +267,17 @@
                             this.$emit('load-more-up'); // 父组件 在获取成功后 需要将topLoading 置为 false
                     },
                     intersectedUp () {
-                        console.log('触发顶部滚动')
-                        if (this.$refs.scrollHandle.scrollTop < this.topObserverHeight && !this.topNoMore && !this.topLoading) {
+                        console.log('触发顶部滚动：', this.$refs.scrollHandle.scrollTop, this.topObserverTriggerDistance)
+                        if (this.$refs.scrollHandle.scrollTop < this.topObserverTriggerDistance && !this.topNoMore && !this.topLoading) {
+                            // 首次滚动触发距离为 顶部观察器高度（避免自定义触发高度后立即触发）
+                            if (this.topTriggerDistanceCanUse && this.topObserverTriggerDistance == this.topObserverHeight){
+                                console.log('首次触发距离进行更改：', this.topObserverTriggerDistance, '->', this.topTriggerDistance)
+                                this.topObserverTriggerDistance = this.topTriggerDistance
+                            }
                             this.intersectedUpReal()
                         } else if (this.useScrollAnchoring && this.topLoading && !this.topLoadingScrollAnchoringStarted){
-                            if (this.$refs.scrollHandle.scrollTop != this.topObserverHeight) {
+                            if (this.$refs.scrollHandle.scrollTop < this.topObserverHeight) {
+                                // 确保锚定能够生效
                                 console.log('锚定校正')
                                 this.startScrollAnchoring();
                             } else {
@@ -425,7 +435,6 @@
             },
             loadMoreUp () {
                 this.loadData(true).then(res => {
-                    this.$refs.scrollHandle.startScrollAnchoring()
                     res.forEach(item => this.tableData.unshift(item));
                     this.$refs.scrollHandle.endLoadingUp(res)
                 }).catch(() => {
@@ -450,7 +459,7 @@
                     namePre = `down${this.addCountDown}`
                 }
 
-                if (isUp && this.addCountUp > 2)
+                if (isUp && this.addCountUp > 4)
                     return Promise.reject();
                 else if (this.addCountDown > 2)
                     return Promise.reject();
